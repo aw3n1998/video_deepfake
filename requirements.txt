@@ -1,0 +1,37 @@
+# 核心处理库
+opencv-python>=4.8.0
+opencv-contrib-python>=4.8.0
+numpy>=1.24,<2.0
+scipy>=1.11
+
+# 人脸检测
+torch>=2.6.0
+torchvision>=0.21.0
+mtcnn>=0.1.1
+mediapipe>=0.10.0
+
+# 换脸引擎
+insightface==0.7.3
+onnxruntime>=1.20.0
+
+# TTS (文字转语音)
+edge-tts>=6.1.14
+pyttsx3>=2.90
+
+# ASR (语音识别) - 用于男声转录后再 TTS 成女声
+faster-whisper>=1.0.3
+
+# 音频处理
+librosa>=0.10.0
+soundfile>=0.12.1
+pydub>=0.25.1
+
+# 视频处理
+ffmpeg-python>=0.2.1
+moviepy>=1.0.3
+
+# 日志和工具
+python-dotenv>=1.0.0
+pyyaml>=6.0
+tqdm>=4.66
+Pillow>=10.0.0
