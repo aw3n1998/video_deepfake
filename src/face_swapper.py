@@ -267,6 +267,8 @@ class FaceSwapper:
 
             frame_count = 0
             male_swap_count = 0
+            prev_swapped = None   # 上一帧换脸结果，用于平滑
+            SMOOTH_ALPHA  = 0.55  # 当前帧权重（越大越清晰，越小越平滑）
 
             while cap.isOpened():
                 ret, frame = cap.read()
@@ -275,6 +277,7 @@ class FaceSwapper:
 
                 result_frame = frame.copy()
                 target_faces = self.face_analyser.get(frame)
+                swapped_this_frame = False
 
                 for target_face in target_faces:
                     # InsightFace gender: 0=female, 1=male
@@ -283,6 +286,16 @@ class FaceSwapper:
                             result_frame, target_face, source_face, paste_back=True
                         )
                         male_swap_count += 1
+                        swapped_this_frame = True
+
+                # 帧间平滑：与上一帧换脸结果加权混合，减少闪烁
+                if swapped_this_frame and prev_swapped is not None:
+                    result_frame = cv2.addWeighted(
+                        result_frame, SMOOTH_ALPHA,
+                        prev_swapped, 1 - SMOOTH_ALPHA, 0
+                    )
+                if swapped_this_frame:
+                    prev_swapped = result_frame.copy()
 
                 out.write(result_frame)
                 frame_count += 1
