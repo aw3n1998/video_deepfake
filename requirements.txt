@@ -5,15 +5,19 @@ opencv-python>=4.8.0
 numpy>=1.24,<2.0
 Pillow>=10.0.0
 
-# PyTorch (CUDA 12.x) - 单独安装，不要在此处 pip install
+# PyTorch (CUDA 12.x) - 单独安装:
 # pip install torch>=2.3.0 torchvision>=0.18.0 --index-url https://download.pytorch.org/whl/cu121
 
-# Stable Diffusion img2img + ControlNet
+# Stable Diffusion img2img / inpainting + ControlNet
 diffusers>=0.30.0
 transformers>=4.40.0
 accelerate>=0.30.0
 controlnet-aux>=0.0.7
 xformers>=0.0.26              # 显存优化 (可选)
+
+# 人脸检测与追踪 (人物替换功能)
+insightface==0.7.3
+onnxruntime-gpu>=1.20.0       # GPU环境; CPU 改用 onnxruntime
 
 # Gradio 界面
 gradio>=4.20.0
