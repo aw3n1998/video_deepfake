@@ -59,12 +59,11 @@ class HairStrand:
     thickness: float
     curl: float
     angle: float
+    angular_velocity: float
     color: Tuple[int, int, int]
     opacity: float
     lifetime: int
     age: int = 0
-    ctrl_ox: float = 0.0
-    ctrl_oy: float = 0.0
 
 
 # ════════════════════════════════════════════════════════════
@@ -117,15 +116,29 @@ class HairFallEffect:
                 fw, fh = int(bb.width * w), int(bb.height * h)
                 return (fx + fw // 2, max(0, fy - fh // 3), fw, fh)
 
-        # Haar fallback
+        # 降级方案：寻找画面中下部的深色大色块（大概率是头发）
+        # 因拍摄角度常为俯视或后脑勺，不露脸时有效避免毛发飘在半空
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = self.face_cascade.detectMultiScale(gray, 1.3, 5)
-        if len(faces) > 0:
-            fx, fy, fw, fh = faces[0]
-            return (fx + fw // 2, max(0, fy - fh // 3), fw, fh)
+        
+        # 只在画面中下部寻找，避免取到边缘或顶部背景
+        mask = np.zeros_like(gray)
+        cv2.ellipse(mask, (w//2, h//2 + int(h*0.05)), (int(w*0.35), int(h*0.35)), 0, 0, 360, 255, -1)
+        gray_masked = cv2.bitwise_and(gray, mask)
+        
+        # 寻找比较暗的区域 (假设头发阈值 < 80)
+        _, thresh = cv2.threshold(gray_masked, 80, 255, cv2.THRESH_BINARY_INV)
+        thresh = cv2.bitwise_and(thresh, mask)  # 再次排除掩码外区域
+        
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours:
+            c = max(contours, key=cv2.contourArea)
+            if cv2.contourArea(c) > (w * h * 0.02):  # 面积足够大
+                bx, by, bw, bh = cv2.boundingRect(c)
+                # 返回深色区域的上边缘略靠下作为掉发中心
+                return (bx + bw // 2, by + int(bh * 0.15), bw, bh)
 
-        # 未检测到 → 画面上部中央
-        return (w // 2, h // 5, w // 3, h // 4)
+        # 最终降级：画面中间偏下 (不再默认 h//5 的天花板位置)
+        return (w // 2, int(h * 0.4), w // 3, h // 4)
 
     def _sample_hair_color(
         self, frame: np.ndarray, head: Tuple[int, int, int, int]
@@ -160,69 +173,74 @@ class HairFallEffect:
         length_mult: float,
     ) -> HairStrand:
         cx, ty, fw, fh = head
-        cv = 15
+        cv = 10
         c = tuple(max(0, min(255, ch + random.randint(-cv, cv))) for ch in color)
 
         return HairStrand(
-            x=cx + random.gauss(0, fw * 0.4),
-            y=ty + random.uniform(-fh * 0.1, fh * 0.35),
-            vx=random.gauss(0, 1.2),
-            vy=random.uniform(0.3, 1.8),
-            length=random.uniform(30, 80) * length_mult,
-            thickness=random.uniform(1.0, 2.2),
-            curl=random.uniform(0.2, 0.8),
-            angle=random.uniform(-0.5, 0.5),
+            x=cx + random.gauss(0, fw * 0.35),
+            y=ty + random.uniform(-fh * 0.1, fh * 0.25),
+            vx=random.gauss(0, 0.8),
+            vy=random.uniform(0.1, 1.0),
+            length=random.uniform(8, 25) * length_mult,  # 缩短长度，变小碎发
+            thickness=random.uniform(0.5, 1.2),          # 变细
+            curl=random.uniform(-0.8, 0.8),              # 随机两端卷曲方向
+            angle=random.uniform(0, math.pi * 2),        # 起始翻滚角
+            angular_velocity=random.gauss(0, 0.15),      # 翻滚速度
             color=c,
-            opacity=random.uniform(0.55, 0.92),
-            lifetime=int(random.uniform(45, 130)),
-            ctrl_ox=random.gauss(0, 12),
-            ctrl_oy=random.uniform(5, 22),
+            opacity=random.uniform(0.6, 0.85),           # 增加透明感
+            lifetime=int(random.uniform(50, 150)),
         )
 
     @staticmethod
     def _update(s: HairStrand, speed: float) -> bool:
         """更新物理状态，返回 False 表示已死"""
-        s.vy += 0.15 * speed
-        s.vx *= 0.98
-        s.vy *= 0.99
-        s.vx += random.gauss(0, 0.25)
+        s.vy += 0.25 * speed  # 重力增强
+        s.vx *= 0.95          # 空气阻力
+        s.vy *= 0.96          # 空气阻力
+        s.vx += random.gauss(0, 0.3)  # 风吹扰动
         s.x += s.vx * speed
         s.y += s.vy * speed
-        s.angle += random.gauss(0, 0.015)
-        s.ctrl_ox += random.gauss(0, 0.4)
+        s.angle += s.angular_velocity * speed  # 空中翻滚
+        
         s.age += 1
         s.lifetime -= 1
-        if s.lifetime < 15:
-            s.opacity *= 0.90
-        return s.lifetime > 0 and s.opacity > 0.04
+        if s.lifetime < 20:
+            s.opacity *= 0.85
+        return s.lifetime > 0 and s.opacity > 0.01
 
     @staticmethod
     def _draw(frame: np.ndarray, s: HairStrand):
-        """渲染一根贝塞尔曲线发丝"""
-        x0, y0 = int(s.x), int(s.y)
-        dx = math.sin(s.angle) * s.length
-        dy = math.cos(s.angle) * s.length
-        x2, y2 = int(s.x + dx), int(s.y + dy)
-        ctrl_x = int((x0 + x2) / 2 + s.ctrl_ox * s.curl)
-        ctrl_y = int((y0 + y2) / 2 + s.ctrl_oy)
+        """渲染一根细软飞扬的发丝 (弧线)"""
+        x0, y0 = s.x, s.y
+        # 从中心点计算两端的偏移量
+        dx = math.cos(s.angle) * s.length / 2
+        dy = math.sin(s.angle) * s.length / 2
+        
+        p1_x, p1_y = int(x0 - dx), int(y0 - dy)
+        p2_x, p2_y = int(x0 + dx), int(y0 + dy)
+        
+        # 贝塞尔控制点: 向法线方向偏移制造出卷曲弧度
+        nx = -math.sin(s.angle) * s.length * s.curl
+        ny = math.cos(s.angle) * s.length * s.curl
+        ctrl_x = int(x0 + nx)
+        ctrl_y = int(y0 + ny)
 
-        n = max(8, int(s.length / 4))
         pts = []
+        n = 6  # 分段数，因为发丝短，不需要太极度平滑
         for ti in range(n + 1):
             t = ti / n
-            bx = (1 - t) ** 2 * x0 + 2 * (1 - t) * t * ctrl_x + t ** 2 * x2
-            by = (1 - t) ** 2 * y0 + 2 * (1 - t) * t * ctrl_y + t ** 2 * y2
+            bx = (1 - t) ** 2 * p1_x + 2 * (1 - t) * t * ctrl_x + t ** 2 * p2_x
+            by = (1 - t) ** 2 * p1_y + 2 * (1 - t) * t * ctrl_y + t ** 2 * p2_y
             pts.append((int(bx), int(by)))
 
         if len(pts) < 2:
             return
 
         overlay = frame.copy()
-        base_t = max(1, int(s.thickness))
+        t_thick = 1 if s.thickness <= 1.5 else 2
+        
         for j in range(len(pts) - 1):
-            progress = j / len(pts)
-            t = max(1, int(base_t * (1.0 - progress * 0.5)))
-            cv2.line(overlay, pts[j], pts[j + 1], s.color, t, cv2.LINE_AA)
+            cv2.line(overlay, pts[j], pts[j + 1], s.color, t_thick, cv2.LINE_AA)
 
         cv2.addWeighted(overlay, s.opacity, frame, 1.0 - s.opacity, 0, frame)
 
