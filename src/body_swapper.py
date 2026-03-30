@@ -27,14 +27,12 @@ OVERLAP    = 4    # 相邻块重叠帧数，用于平滑过渡
 
 class BodySwapper:
     DEFAULT_PROMPT = (
-        "beautiful young woman, female, long hair, feminine appearance, "
         "photorealistic, high quality, 8k uhd, professional photography, "
-        "natural lighting, detailed face, consistent appearance"
+        "natural lighting, detailed face, consistent appearance, masterpiece"
     )
     DEFAULT_NEG = (
-        "male, man, boy, masculine, beard, mustache, stubble, "
         "ugly, deformed, blurry, low quality, watermark, nsfw, "
-        "flickering, inconsistent, temporal artifacts"
+        "flickering, inconsistent, temporal artifacts, bad anatomy"
     )
 
     def __init__(

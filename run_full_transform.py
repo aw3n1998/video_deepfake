@@ -1,27 +1,22 @@
 #!/usr/bin/env python3
 """
-完整转换：男性 -> 女性（AnimateDiff全身重绘 + 换脸 + 男声变女声 + BGM保留）
-多线程版：音频流水线与视频处理并行执行
+完整转换：通用 AI 视频高清重绘（AnimateDiff 全身重绘 + 换脸精修 + 声音处理 + BGM 保留）
+多线程版：并行处理音频流水线与视频生成，极致提升 5090 运行效率。
 
-处理流程（并行）:
-  ┌─ Thread-Audio ─────────────────────────────────────────┐
-  │  demucs 分离人声/BGM → 检测男声段 → 变调 → 混合        │
-  └────────────────────────────────────────────────────────┘
-  ┌─ Main (GPU) ───────────────────────────────────────────┐
-  │  AnimateDiff+ControlNet（16帧/块，帧间时序注意力）      │
-  │  → 块间重叠融合（无闪烁）→ InsightFace 换脸精修         │
-  └────────────────────────────────────────────────────────┘
-  最终：流畅女性画面 + 新音频(男声→女声,BGM不变) → 输出
+处理流程:
+  1. 画面端：AnimateDiff + ControlNet 联合驱动，16 帧一组块状渲染，块间重叠融合确保无闪烁。
+  2. 精修端：使用 InsightFace 进行高保真人脸重绘（可选性别过滤或全替换）。
+  3. 音频端：音频分离 -> 目标音色参数转换/变调 -> 与原 BGM 重新混音。
 
 用法:
-  python run_full_transform.py --input 视频.mp4 --face 女脸.png --output 输出.mp4
+  python run_full_transform.py --input 视频.mp4 --face 目标人脸.png --output 输出.mp4
 
 参数:
   --input        输入视频（必填）
-  --face         女性人脸图片（必填）
+  --face         目标人脸图片（必填）
   --output       输出路径（默认 output_full.mp4）
   --strength     重绘强度（默认 0.85，越高变化越大）
-  --semitones    男声变调半音数（默认 5）
+  --semitones    声音变调半音数（默认 5）
   --no-face-swap 跳过换脸精修
   --keep-temp    保留临时文件
   --segments     视频分段数（默认1，内存不足时设4）
@@ -53,7 +48,7 @@ logger = logging.getLogger(__name__)
 def _audio_pipeline(input_video: str, work_dir: Path, semitones: int,
                     result: dict) -> None:
     """
-    独立线程：人声/BGM分离 → 男声变调 → 混合
+    独立线程：人声/BGM分离 → 变调 → 混合
     结果写入 result['audio_path']，失败写入 result['error']
     """
     try:
@@ -94,23 +89,21 @@ def _audio_pipeline(input_video: str, work_dir: Path, semitones: int,
         logger.info(f"[Audio] 人声: {vocals_wav}")
         logger.info(f"[Audio] BGM : {bgm_wav}")
 
-        # ── 3. 检测男/女声段 + 变调 ────────────────────────
-        logger.info("[Audio] 检测男声片段并变调...")
+        # ── 3. 检测声段 + 变调 ────────────────────────
+        logger.info("[Audio] 检测语音片段并变调...")
         from inaSpeechSegmenter import Segmenter
         segments = Segmenter()(vocals_wav)
-        male_count = sum(1 for l, s, e in segments if l == 'male')
-        logger.info(f"[Audio] 检测到男声 {male_count} 段")
-
+        
         y, sr = librosa.load(vocals_wav, sr=None, mono=False)
         if y.ndim == 1:
             y = np.array([y, y])
         result_audio = y.copy()
 
         for label, start, end in segments:
-            if label != 'male':
+            if label == 'noEnergy':
                 continue
             s, e = int(start * sr), int(end * sr)
-            logger.info(f"[Audio]   男声变调: {start:.1f}s ~ {end:.1f}s")
+            logger.info(f"[Audio]   变调: {start:.1f}s ~ {end:.1f}s")
             for ch in range(result_audio.shape[0]):
                 result_audio[ch, s:e] = librosa.effects.pitch_shift(
                     y[ch, s:e], sr=sr, n_steps=semitones
@@ -141,12 +134,13 @@ def _audio_pipeline(input_video: str, work_dir: Path, semitones: int,
 
 def process(
     input_video: str,
-    female_face: str,
+    target_face: str,
     output_path: str = 'output_full.mp4',
-    skip_frames: int = 2,
-    strength: float = 0.75,
-    batch_size: int = 4,
+    skip_frames: int = 0,
+    batch_size: int = 1,
+    strength: float = 0.85,
     semitones: int = 5,
+    filter_gender: int = -1,
     no_face_swap: bool = False,
     no_body_swap: bool = False,
     keep_temp: bool = False,
@@ -159,9 +153,10 @@ def process(
     ensure_dir(work_dir)
 
     logger.info("=" * 60)
-    logger.info("  完整性别转换（多线程版）")
+    logger.info("  通用 AI 视频重塑（多线程并行版）")
     logger.info(f"  视频={input_video}")
-    logger.info(f"  skip_frames={skip_frames}  batch_size={batch_size}  strength={strength}")
+    logger.info(f"  人脸={target_face}")
+    logger.info(f"  strength={strength}  semitones={semitones}")
     logger.info("=" * 60)
 
     try:
@@ -211,10 +206,12 @@ def process(
             from src.face_swapper import FaceSwapper
             swapper = FaceSwapper()
             face_swapped = str(work_dir / 'face_swapped.mp4')
-            ok = swapper.swap_male_faces_in_video(
-                source_image_path=female_face,
+            # 使用通用换脸接口，默认全替换
+            ok = swapper.swap_faces_by_gender(
+                source_image_path=target_face,
                 video_path=body_swapped,
                 output_path=face_swapped,
+                filter_gender=filter_gender
             )
             if not ok:
                 logger.warning("换脸失败，使用全身重绘结果继续")
@@ -269,29 +266,27 @@ def process(
 # 视频分段并行处理
 # ════════════════════════════════════════════════════════════
 
-def _process_segment(seg_input, seg_output, female_face, skip_frames,
-                     strength, batch_size, no_face_swap, gpu_id, result, idx):
-    """单个视频段的处理函数（在独立线程中运行）"""
+def _process_segment(seg_input, seg_output, target_face, skip_frames,
+                     strength, batch_size, no_face_swap, filter_gender, gpu_id, result, idx):
+    """单个视频段的处理函数"""
     try:
         os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
         from src.body_swapper import BodySwapper
         from src.face_swapper import FaceSwapper
 
-        body_swapper = BodySwapper(
-            strength=strength, device='cuda', batch_size=batch_size
-        )
+        body_swapper = BodySwapper(strength=strength, device='cuda', batch_size=batch_size)
         body_tmp = seg_output.replace('.mp4', '_body.mp4')
         body_swapper.process_video(seg_input, body_tmp, skip_frames=skip_frames)
 
         if no_face_swap:
-            import shutil
             shutil.copy(body_tmp, seg_output)
         else:
             swapper = FaceSwapper()
-            ok = swapper.swap_male_faces_in_video(
-                source_image_path=female_face,
+            ok = swapper.swap_faces_by_gender(
+                source_image_path=target_face,
                 video_path=body_tmp,
                 output_path=seg_output,
+                filter_gender=filter_gender
             )
             if not ok:
                 import shutil
@@ -382,7 +377,7 @@ def process_with_segments(
                     target=_process_segment,
                     args=(seg_in, seg_out, female_face, skip_frames,
                           strength, batch_size, no_face_swap,
-                          gpu_id, seg_results, i),
+                          -1, gpu_id, seg_results, i),
                     daemon=True
                 )
                 threads.append(t)
@@ -397,7 +392,7 @@ def process_with_segments(
                 _process_segment(
                     seg_in, seg_out, female_face, skip_frames,
                     strength, batch_size, no_face_swap,
-                    0, seg_results, i
+                    -1, 0, seg_results, i
                 )
                 # 释放显存
                 import gc
@@ -464,23 +459,23 @@ def process_with_segments(
 
 def main():
     parser = argparse.ArgumentParser(description='完整男转女（多线程+分段版）')
-    parser.add_argument('--input',        required=True)
-    parser.add_argument('--face',         required=True)
-    parser.add_argument('--output',       default='output_full.mp4')
-    parser.add_argument('--skip-frames',  type=int,   default=2)
-    parser.add_argument('--strength',     type=float, default=0.75)
+    parser.add_argument('--input',     required=True, help='输入视频')
+    parser.add_argument('--face',      required=True, help='目标人脸图片')
+    parser.add_argument('--output',    default='output_full.mp4', help='输出路径')
+    parser.add_argument('--strength',  type=float, default=0.85, help='重绘强度 (0.1~1.0)')
+    parser.add_argument('--semitones', type=int,   default=5,    help='变调半音')
+    parser.add_argument('--gender',    type=int,   default=-1,   help='性别过滤 (1:男, 0:女, -1:全换)')
+    parser.add_argument('--no-face-swap', action='store_true', help='跳过换脸')
     parser.add_argument('--batch-size',   type=int,   default=4,
                         help='SD批量推理帧数（96GB显存推荐4~8）')
-    parser.add_argument('--semitones',    type=int,   default=5)
     parser.add_argument('--segments',     type=int,   default=1,
                         help='视频分段数（1=不分段，4=切成4段顺序处理节省显存）')
     parser.add_argument('--gpus',         type=int,   default=1,
                         help='可用GPU数量（多卡时各段并行）')
-    parser.add_argument('--no-face-swap', action='store_true')
     parser.add_argument('--keep-temp',    action='store_true')
     args = parser.parse_args()
 
-    for path, name in [(args.input, '输入视频'), (args.face, '女性人脸图片')]:
+    for path, name in [(args.input, '输入视频'), (args.face, '目标人脸图片')]:
         if not os.path.exists(path):
             print(f"[FAIL] {name} 不存在: {path}")
             sys.exit(1)
@@ -501,15 +496,14 @@ def main():
         )
     else:
         success = process(
-            input_video  = args.input,
-            female_face  = args.face,
-            output_path  = args.output,
-            skip_frames  = args.skip_frames,
-            strength     = args.strength,
-            batch_size   = args.batch_size,
-            semitones    = args.semitones,
-            no_face_swap = args.no_face_swap,
-            keep_temp    = args.keep_temp,
+            input_video=args.input,
+            target_face=args.face,
+            output_path=args.output,
+            strength=args.strength,
+            semitones=args.semitones,
+            filter_gender=args.gender,
+            no_face_swap=args.no_face_swap,
+            keep_temp=args.keep_temp
         )
     sys.exit(0 if success else 1)
 

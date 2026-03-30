@@ -225,20 +225,18 @@ class FaceSwapper:
             logger.error(f"视频处理失败: {e}")
             return False
 
-    def swap_male_faces_in_video(self, source_image_path: str, video_path: str,
-                                 output_path: str, progress_callback=None) -> bool:
+    def swap_faces_by_gender(self, source_image_path: str, video_path: str,
+                              output_path: str, filter_gender: int = -1, 
+                              progress_callback=None) -> bool:
         """
-        在视频所有帧中只替换男性人脸（gender==1），女性人脸保持不变。
-        使用 InsightFace buffalo_l 模型内置的性别属性进行过滤。
-
+        在视频所有帧中根据性别规律进行脸交换。
+        
         Args:
-            source_image_path: 替换用的女性人脸图片路径
+            source_image_path: 目标人脸图片路径
             video_path: 输入视频路径
             output_path: 输出视频路径（无音频）
-            progress_callback: 进度回调函数 (0.0~1.0)
-
-        Returns:
-            成功返回 True
+            filter_gender: 0: 仅换女性, 1: 仅换男性, -1: 见脸就换
+            progress_callback: 进度回调 (0.0~1.0)
         """
         try:
             source_image = cv2.imread(source_image_path)
@@ -246,7 +244,6 @@ class FaceSwapper:
                 logger.error(f"无法读取源图片: {source_image_path}")
                 return False
 
-            # 获取替换用的源人脸特征
             source_face = self.get_face_embedding(source_image)
             if source_face is None:
                 logger.error("源图片中未检测到有效人脸")
@@ -266,121 +263,89 @@ class FaceSwapper:
             out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
 
             frame_count = 0
-            male_swap_count = 0
-            prev_swapped = None   # 上一帧换脸结果，用于平滑
-            SMOOTH_ALPHA  = 0.55  # 当前帧权重（越大越清晰，越小越平滑）
+            swap_count = 0
+            prev_swapped = None
+            SMOOTH_ALPHA = 0.55
 
             while cap.isOpened():
                 ret, frame = cap.read()
-                if not ret:
-                    break
+                if not ret: break
 
                 result_frame = frame.copy()
                 target_faces = self.face_analyser.get(frame)
                 swapped_this_frame = False
 
                 for target_face in target_faces:
-                    # InsightFace gender: 0=female, 1=male
-                    if getattr(target_face, 'gender', -1) == 1:
+                    # 获取性别属性 (0: female, 1: male)
+                    face_gender = getattr(target_face, 'gender', -1)
+                    
+                    # 检查是否满足过滤条件
+                    if filter_gender == -1 or face_gender == filter_gender:
                         result_frame = self.face_swapper.get(
                             result_frame, target_face, source_face, paste_back=True
                         )
-                        male_swap_count += 1
+                        swap_count += 1
                         swapped_this_frame = True
 
-                # 帧间平滑：与上一帧换脸结果加权混合，减少闪烁
                 if swapped_this_frame and prev_swapped is not None:
-                    result_frame = cv2.addWeighted(
-                        result_frame, SMOOTH_ALPHA,
-                        prev_swapped, 1 - SMOOTH_ALPHA, 0
-                    )
+                    result_frame = cv2.addWeighted(result_frame, SMOOTH_ALPHA, prev_swapped, 1 - SMOOTH_ALPHA, 0)
                 if swapped_this_frame:
                     prev_swapped = result_frame.copy()
 
                 out.write(result_frame)
                 frame_count += 1
-
-                if progress_callback:
-                    progress_callback(frame_count / total_frames)
-
+                if progress_callback: progress_callback(frame_count / total_frames)
+                
                 if frame_count % 30 == 0:
-                    logger.info(
-                        f"处理进度: {frame_count}/{total_frames} 帧 "
-                        f"({100 * frame_count / total_frames:.1f}%) | "
-                        f"累计替换男脸: {male_swap_count} 次"
-                    )
+                    logger.info(f"处理进度: {frame_count}/{total_frames} 帧 | 累计替换: {swap_count} 次")
 
             cap.release()
             out.release()
-
-            logger.info(f"[OK] 男性人脸替换完成，共替换 {male_swap_count} 次，输出: {output_path}")
+            logger.info(f"[OK] 换脸处理完成，共替换 {swap_count} 次，输出: {output_path}")
             return True
-
         except Exception as e:
-            logger.error(f"男性人脸替换失败: {e}")
+            logger.error(f"换脸处理异常: {e}")
             return False
 
-    def swap_male_faces_in_video_parallel(self, source_image_path: str, video_path: str,
-                                          output_path: str, n_workers: int = None) -> bool:
-        """
-        并行版：把视频切成 n_workers 段，多进程同时换脸，最后合并。
+    def swap_male_faces_in_video(self, source_image_path: str, video_path: str,
+                                 output_path: str, progress_callback=None) -> bool:
+        """[已过时] 请使用 swap_faces_by_gender(..., filter_gender=1)"""
+        return self.swap_faces_by_gender(source_image_path, video_path, output_path, 
+                                         filter_gender=1, progress_callback=progress_callback)
 
+    def swap_faces_in_video_parallel(self, source_image_path: str, video_path: str,
+                                      output_path: str, filter_gender: int = -1, 
+                                      n_workers: int = None) -> bool:
+        """
+        通用并行版换脸。
+        
         Args:
-            source_image_path: 替换用女性人脸图片
+            source_image_path: 目标人脸图片
             video_path: 输入视频
-            output_path: 输出视频（无音频）
-            n_workers: 并行进程数（默认 = CPU核心数 // 2，最少2，最多8）
-
-        Returns:
-            成功返回 True
+            output_path: 输出路径
+            filter_gender: 0: 仅换女性, 1: 仅换男性, -1: 全部替换
+            n_workers: 并行数
         """
-        import multiprocessing
-        import subprocess
-        import shutil
+        import multiprocessing, subprocess, shutil
 
-        # ── 确定进程数 ──────────────────────────────────────────────────────
         cpu_count = multiprocessing.cpu_count()
-        if n_workers is None:
-            n_workers = max(2, cpu_count // 2)
+        if n_workers is None: n_workers = max(2, cpu_count // 2)
         n_workers = max(1, min(n_workers, 8))
-        logger.info(f"并行换脸：{n_workers} 进程（CPU 核心数: {cpu_count}）")
+        logger.info(f"启动并行换脸：{n_workers} 进程")
 
-        # ── 获取视频时长 ─────────────────────────────────────────────────────
         cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            logger.error(f"无法打开视频: {video_path}")
-            return False
-        fps         = cap.get(cv2.CAP_PROP_FPS)
+        if not cap.isOpened(): return False
+        fps = cap.get(cv2.CAP_PROP_FPS)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         cap.release()
 
-        total_duration = total_frames / fps if fps > 0 else 0
-        seg_duration   = total_duration / n_workers
-        logger.info(f"视频时长: {total_duration:.1f}s，每段约 {seg_duration:.1f}s")
-
-        # ── 检查 ffmpeg 是否可用 ─────────────────────────────────────────────
-        import shutil as _shutil
-        if not _shutil.which('ffmpeg'):
-            logger.error("未找到 ffmpeg！请先安装：winget install ffmpeg，然后重新打开终端")
-            return False
-
-        # ── 临时目录 ─────────────────────────────────────────────────────────
-        work_dir = Path(output_path).parent / '_parallel_tmp'
+        work_dir = Path(tempfile.mkdtemp(prefix='faceswap_p_'))
         work_dir.mkdir(parents=True, exist_ok=True)
 
-        # ── FFmpeg 切片（stream copy，无损极快）───────────────────────────────
+        # ── FFmpeg 切分 ──────────────────────────────────────────────────────
+        duration_per_seg = (total_frames / fps) / n_workers
         input_segs = []
         for i in range(n_workers):
-            start    = i * seg_duration
-            seg_path = str(work_dir / f'seg_{i:03d}_in.mp4')
-            cmd = [
-                'ffmpeg', '-y',
-                '-i', video_path,
-                '-ss', f'{start:.3f}',
-                '-t',  f'{seg_duration:.3f}',
-                '-c', 'copy',
-                seg_path
-            ]
             ret = subprocess.run(cmd, capture_output=True)
             if ret.returncode != 0 or not Path(seg_path).exists():
                 logger.error(f"切割片段 {i} 失败: {ret.stderr.decode(errors='replace')}")
