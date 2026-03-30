@@ -90,12 +90,15 @@ class HairFallEffect:
         """尝试加载 MediaPipe（更准确），失败时回退到 Haar"""
         try:
             import mediapipe as mp
-            self._mp_detector = mp.solutions.face_detection.FaceDetection(
+            # 显式导入以防属性丢失 (Colab 的 protobuf 冲突常导致 mp.solutions 丢失)
+            import mediapipe.python.solutions.face_detection as mp_face_detection
+            
+            self._mp_detector = mp_face_detection.FaceDetection(
                 model_selection=1, min_detection_confidence=0.5
             )
             logger.info("掉发特效: 使用 MediaPipe 检测")
-        except ImportError:
-            logger.info("掉发特效: 使用 OpenCV Haar 检测 (pip install mediapipe 可提升精度)")
+        except Exception as e:
+            logger.warning(f"MediaPipe 无法初始化 ({e})，使用 OpenCV Haar 退化方案")
 
     # ────────────────────────────────────────────────────────
     # 头部检测
