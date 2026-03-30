@@ -10,10 +10,11 @@ AI 视频智能重绘工具
 
 from .vid2vid import Vid2VidPipeline
 from .person_swap import PersonSwapPipeline
+from .hair_effect import HairFallEffect, should_trigger as hair_trigger
 from .video_io import get_video_info, merge_video_audio, check_ffmpeg
 from .utils import ensure_dir, get_timestamp, validate_video_path, validate_image_path
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 __all__ = [
     "Vid2VidPipeline",
     "PersonSwapPipeline",

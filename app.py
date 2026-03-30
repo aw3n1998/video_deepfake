@@ -2,9 +2,10 @@
 """
 AI 视频智能重绘工作站 - Gradio 界面
 
-两大功能：
+三大功能：
 1. 通用视频重绘 — 全局风格转换
 2. 人物替换 — 多人场景中替换指定人物
+3. 掉发特效 — 物理粒子模拟（提示词含掉发关键词时自动触发）
 """
 
 import argparse
@@ -96,11 +97,12 @@ def _run_v2v(video, ref, prompt, neg, strength, steps, res, cfg, cn_scale, tempo
         from src.vid2vid import Vid2VidPipeline
         from src.utils import sanitize_prompt, clamp
 
+        clean_prompt = sanitize_prompt(prompt)
         pipe = Vid2VidPipeline(device="cuda")
         ok = pipe.process_video(
             video_path=video,
             output_path=out,
-            prompt=sanitize_prompt(prompt),
+            prompt=clean_prompt,
             negative_prompt=sanitize_prompt(neg) if neg else "",
             reference_image=ref,
             num_steps=int(clamp(steps, 10, 50)),
@@ -110,6 +112,18 @@ def _run_v2v(video, ref, prompt, neg, strength, steps, res, cfg, cn_scale, tempo
             resolution=int(clamp(res, 512, 1024)),
             temporal_smoothing=clamp(temporal, 0.0, 0.5),
         )
+
+        # 自动检测：提示词含掉发关键词 → 叠加掉发特效
+        if ok:
+            from src.hair_effect import should_trigger, HairFallEffect
+            if should_trigger(clean_prompt):
+                logger.info("检测到掉发关键词，自动叠加掉发特效...")
+                fx = HairFallEffect()
+                final_out = "output_v2v_fx.mp4"
+                fx_ok = fx.process_video(out, final_out)
+                if fx_ok:
+                    out = final_out
+
         return (out if ok else None), ("✅ 重绘完成！" if ok else "❌ 失败")
     except Exception as e:
         logger.exception(f"异常: {e}")
@@ -245,7 +259,7 @@ def build_ui():
 
         gr.Markdown("""
         # 🎬 AI 视频智能重绘工作站
-        **两大模式：全局风格重绘 · 指定人物替换**
+        **三大模式：全局风格重绘 · 指定人物替换 · 掉发特效**
         """)
 
         with gr.Tabs():
@@ -377,6 +391,74 @@ def build_ui():
                     inputs=[swap_video, swap_ref, swap_idx,
                             swap_prompt, swap_neg, swap_strength, swap_steps, swap_res],
                     outputs=[swap_output, swap_status],
+                )
+
+            # ──────────────────────────────────────────
+            # Tab 3: 掉发特效
+            # ──────────────────────────────────────────
+            with gr.Tab("💇 掉发特效"):
+                gr.Markdown(
+                    "**物理粒子掉发**: 上传梳头视频 → 自动检测头部 → "
+                    "生成真实掉发效果。纯 CPU 运算，秒级处理。\n\n"
+                    "💡 在通用重绘中输入含"掉发"的提示词时，此特效也会自动叠加。"
+                )
+
+                fx_video = gr.Video(label="📹 输入视频 (梳头视频)", height=280)
+
+                with gr.Accordion("⚙️ 特效参数", open=True):
+                    with gr.Row():
+                        fx_intensity = gr.Slider(
+                            0.3, 3.0, value=1.0, step=0.1, label="💈 掉发密度",
+                        )
+                        fx_length = gr.Slider(
+                            0.5, 2.0, value=1.0, step=0.1, label="📏 发丝长度",
+                        )
+                    with gr.Row():
+                        fx_rate = gr.Slider(
+                            0.3, 3.0, value=1.0, step=0.1, label="⏱️ 生成速率",
+                        )
+                        fx_speed = gr.Slider(
+                            0.5, 2.0, value=1.0, step=0.1, label="🌊 掉落速度",
+                        )
+
+                with gr.Row():
+                    fx_btn = gr.Button("🚀 添加掉发特效", variant="primary", scale=3, size="lg")
+                    fx_status = gr.Textbox(label="状态", scale=2, interactive=False)
+
+                fx_output = gr.Video(label="📤 输出视频", height=350)
+
+                def _run_fx(video, intensity, length, rate, speed):
+                    global _processing
+                    with _lock:
+                        if _processing:
+                            return None, "⚠️ 已有任务运行中"
+                        _processing = True
+                    if not video:
+                        with _lock:
+                            _processing = False
+                        return None, "❌ 请上传视频"
+                    _progress.clear()
+                    out = "output_hairfx.mp4"
+                    try:
+                        from src.hair_effect import HairFallEffect
+                        fx = HairFallEffect()
+                        ok = fx.process_video(
+                            video_path=video, output_path=out,
+                            intensity=intensity, strand_length=length,
+                            spawn_rate=rate, fall_speed=speed,
+                        )
+                        return (out if ok else None), ("✅ 特效完成！" if ok else "❌ 失败")
+                    except Exception as e:
+                        logger.exception(f"异常: {e}")
+                        return None, f"❌ {e}"
+                    finally:
+                        with _lock:
+                            _processing = False
+
+                fx_btn.click(
+                    fn=_run_fx,
+                    inputs=[fx_video, fx_intensity, fx_length, fx_rate, fx_speed],
+                    outputs=[fx_output, fx_status],
                 )
 
         # ──────────────────────────────────────────
