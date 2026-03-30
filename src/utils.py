@@ -1,73 +1,87 @@
 """
-工具函数库
+工具函数库 - 包含安全工具
 """
 
 import os
+import re
+import logging
 from pathlib import Path
 from datetime import datetime
-import logging
 
 logger = logging.getLogger(__name__)
 
 
-def ensure_dir(directory: Path) -> Path:
+def ensure_dir(directory) -> Path:
     """确保目录存在"""
+    directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     return directory
 
 
 def get_timestamp() -> str:
     """获取当前时间戳"""
-    return datetime.now().strftime('%Y%m%d_%H%M%S')
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
 def get_file_size(file_path: str) -> str:
     """获取文件大小（可读格式）"""
     size = os.path.getsize(file_path)
-    for unit in ['B', 'KB', 'MB', 'GB']:
+    for unit in ["B", "KB", "MB", "GB"]:
         if size < 1024:
             return f"{size:.2f}{unit}"
         size /= 1024
     return f"{size:.2f}TB"
 
 
-def clean_cache_dir(cache_dir: Path, keep_latest: int = 3):
-    """
-    清理缓存目录，只保留最新的 N 个文件
-    """
-    try:
-        files = sorted(
-            cache_dir.glob('*'),
-            key=lambda x: x.stat().st_mtime,
-            reverse=True
-        )
-        
-        for file in files[keep_latest:]:
-            if file.is_file():
-                file.unlink()
-                logger.info(f"删除缓存文件: {file.name}")
-    
-    except Exception as e:
-        logger.warning(f"清理缓存失败: {e}")
+def validate_video_path(path: str) -> bool:
+    """验证视频文件路径安全性"""
+    if not path:
+        return False
+
+    p = Path(path).resolve()
+
+    # 检查文件存在性
+    if not p.is_file():
+        logger.warning(f"文件不存在: {path}")
+        return False
+
+    # 检查扩展名白名单
+    allowed_ext = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
+    if p.suffix.lower() not in allowed_ext:
+        logger.warning(f"不支持的视频格式: {p.suffix}")
+        return False
+
+    return True
 
 
-def load_config(config_path: str) -> dict:
-    """加载 YAML 配置文件"""
-    try:
-        import yaml
-        with open(config_path, 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f)
-    except Exception as e:
-        logger.error(f"加载配置文件失败: {e}")
-        return {}
+def validate_image_path(path: str) -> bool:
+    """验证图片文件路径安全性"""
+    if not path:
+        return False
+
+    p = Path(path).resolve()
+
+    if not p.is_file():
+        logger.warning(f"文件不存在: {path}")
+        return False
+
+    allowed_ext = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff"}
+    if p.suffix.lower() not in allowed_ext:
+        logger.warning(f"不支持的图片格式: {p.suffix}")
+        return False
+
+    return True
 
 
-def save_config(config: dict, output_path: str):
-    """保存配置到 YAML 文件"""
-    try:
-        import yaml
-        with open(output_path, 'w', encoding='utf-8') as f:
-            yaml.dump(config, f, allow_unicode=True)
-        logger.info(f"配置已保存: {output_path}")
-    except Exception as e:
-        logger.error(f"保存配置失败: {e}")
+def sanitize_prompt(prompt: str, max_length: int = 1000) -> str:
+    """清理提示词，移除潜在危险字符"""
+    if not prompt:
+        return ""
+    # 移除控制字符，保留基本文本
+    cleaned = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', prompt)
+    return cleaned[:max_length].strip()
+
+
+def clamp(value: float, min_val: float, max_val: float) -> float:
+    """将值限制在范围内"""
+    return max(min_val, min(max_val, value))

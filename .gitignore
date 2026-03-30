@@ -1,48 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
 # 虚拟环境
-venv*/
+venv/
 .venv/
 env/
 
-# 模型文件（太大，用户自行下载）
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 模型和数据
 models/
+data/
+logs/
 *.onnx
 *.pt
 *.pth
-*.bin
+*.safetensors
 
-# 视频/音频媒体文件
-*.mp4
-*.avi
-*.mov
-*.mkv
-*.mp3
-*.wav
-*.m4a
+# 输出文件
+output_*.mp4
+*_temp_*.mp4
 
-# 临时处理目录
-data/
-
-# 日志
-logs/
-*.log
-
-# Python 缓存
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-
-# 图片（人脸素材，隐私）
-*.png
-*.jpg
-*.jpeg
-
-# IDE
-.vscode/
-.idea/
-*.swp
-
-# OS
+# 系统
 .DS_Store
 Thumbs.db
+
+# 环境变量
+.env

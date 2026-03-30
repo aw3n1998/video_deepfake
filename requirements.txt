@@ -1,49 +1,22 @@
-# 核心处理库
-opencv-python>=4.8.0
-opencv-contrib-python>=4.8.0
-numpy>=1.24,<2.0
-scipy>=1.11
+# AI 视频智能重绘 - 依赖列表
 
-# 人脸检测与换脸
-insightface==0.7.3
-onnxruntime-gpu>=1.20.0   # GPU环境；纯CPU改用 onnxruntime
+# 核心
+opencv-python>=4.8.0
+numpy>=1.24,<2.0
 Pillow>=10.0.0
 
-# PyTorch（CUDA 12.x）
-# 安装时用下方单独命令，不要用 pip install -r 安装此行
-# torch>=2.3.0  torchvision>=0.18.0
+# PyTorch (CUDA 12.x) - 单独安装，不要在此处 pip install
+# pip install torch>=2.3.0 torchvision>=0.18.0 --index-url https://download.pytorch.org/whl/cu121
 
-# 全身重绘：AnimateDiff + ControlNet
+# Stable Diffusion img2img + ControlNet
 diffusers>=0.30.0
 transformers>=4.40.0
 accelerate>=0.30.0
 controlnet-aux>=0.0.7
-xformers>=0.0.26          # 显存优化（可选，装不上跳过）
-
-# 姿态/分割
-rembg>=2.0.50
-
-# 音频分离
-demucs>=4.0.0
-
-# 音频性别检测
-inaSpeechSegmenter>=0.7.7
-
-# 音频处理
-librosa>=0.10.0
-soundfile>=0.12.1
-pydub>=0.25.1
-
-# 视频工具
-ffmpeg-python>=0.2.1
+xformers>=0.0.26              # 显存优化 (可选)
 
 # Gradio 界面
 gradio>=4.20.0
 
-# AI 参数调整（国内可用）
-openai>=1.30.0             # DeepSeek / 通义千问 / 智谱 / MiniMax
-qianfan>=0.3.0             # 文心一言（可选）
-
-# 其他工具
-python-dotenv>=1.0.0
+# 工具
 tqdm>=4.66

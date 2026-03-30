@@ -1,48 +1,31 @@
-# 视频深度伪造处理器 - 配置文件
+# AI 视频智能重绘 - 配置文件
 
 # 工作目录
 work_dir: ./data
 
-# 人脸检测配置
-face_detector:
-  model_type: mtcnn          # 'mtcnn' | 'mediapipe' | 'yolov8'
-  confidence_threshold: 0.9   # 置信度阈值
+# Vid2Vid 管线参数
+vid2vid:
+  sd_model: "SG161222/Realistic_Vision_V5.1_noVAE"
+  device: cuda
+  default_strength: 0.35       # 重绘强度 (0.2~0.5 推荐)
+  default_steps: 25            # 推理步数
+  default_resolution: 768      # 处理分辨率
+  default_guidance_scale: 7.5  # CFG 系数
+  controlnet_scale: 0.8        # 结构锁定强度
+  temporal_smoothing: 0.12     # 时序平滑 (0=关闭)
+  deflicker_window: 7          # 去闪烁窗口大小
 
-# 人脸交换配置
-face_swapper:
-  model_name: inswapper_128.onnx
-  use_gpu: false             # 是否使用 GPU 加速
-
-# TTS 配置
-tts:
-  engine: edge-tts           # 'edge-tts' | 'pyttsx3' | 'xunfei'
-  voice: zh-CN-XiaoxiaoNeural # 语音种类
-                             # 中文选项:
-                             # - zh-CN-XiaoxiaoNeural (女性)
-                             # - zh-CN-YunjianNeural (男性)
-  rate: '+0%'                # 语速 '+10%' | '+0%' | '-10%'
-
-# 音频处理配置
-audio:
-  sample_rate: 44100         # 采样率
-  bit_rate: 192k             # 比特率
-
-# 视频配置
+# 视频输出配置
 video:
-  output_format: mp4         # 输出格式 'mp4' | 'avi' | 'mov'
-  codec: h264                # 编码器 'h264' | 'h265' | 'vp9'
-  bitrate: 5000k             # 比特率 '5000k' | '10M'
-  fps: 30                    # 帧率
+  output_format: mp4
+  codec: libx264
+  crf: 18                      # 质量 (0=无损, 18=高质量, 23=默认)
+  audio_bitrate: 192k
 
 # 日志配置
 logging:
-  level: INFO                # DEBUG | INFO | WARNING | ERROR
+  level: INFO
   log_dir: ./logs
-  log_file: pipeline.log
 
-# 缓存配置
-cache:
-  enabled: true
-  directory: ./data/cache
-  keep_latest: 3             # 保留最近的 N 个缓存
-  auto_clean: true           # 自动清理
+# HuggingFace 镜像 (国内加速)
+hf_mirror: https://hf-mirror.com
