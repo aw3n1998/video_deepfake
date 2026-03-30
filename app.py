@@ -96,8 +96,19 @@ def _run_v2v(video, ref, prompt, neg, strength, steps, res, cfg, cn_scale, tempo
     try:
         from src.vid2vid import Vid2VidPipeline
         from src.utils import sanitize_prompt, clamp
+        from src.hair_effect import should_trigger, is_hair_only, HairFallEffect
 
         clean_prompt = sanitize_prompt(prompt)
+        hair_triggered = should_trigger(clean_prompt)
+
+        # 如果提示词纯粹描述掉发（无其他风格指令），跳过 vid2vid 直接叠加粒子特效
+        # 避免 vid2vid 用叙事型提示词白白劣化原视频画质
+        if hair_triggered and is_hair_only(clean_prompt):
+            logger.info("提示词为纯掉发描述，跳过视频重绘，直接叠加掉发特效...")
+            fx = HairFallEffect()
+            ok = fx.process_video(video, out)
+            return (out if ok else None), ("✅ 掉发特效完成！" if ok else "❌ 失败")
+
         pipe = Vid2VidPipeline(device="cuda")
         ok = pipe.process_video(
             video_path=video,
@@ -114,15 +125,13 @@ def _run_v2v(video, ref, prompt, neg, strength, steps, res, cfg, cn_scale, tempo
         )
 
         # 自动检测：提示词含掉发关键词 → 叠加掉发特效
-        if ok:
-            from src.hair_effect import should_trigger, HairFallEffect
-            if should_trigger(clean_prompt):
-                logger.info("检测到掉发关键词，自动叠加掉发特效...")
-                fx = HairFallEffect()
-                final_out = "output_v2v_fx.mp4"
-                fx_ok = fx.process_video(out, final_out)
-                if fx_ok:
-                    out = final_out
+        if ok and hair_triggered:
+            logger.info("检测到掉发关键词，自动叠加掉发特效...")
+            fx = HairFallEffect()
+            final_out = "output_v2v_fx.mp4"
+            fx_ok = fx.process_video(out, final_out)
+            if fx_ok:
+                out = final_out
 
         return (out if ok else None), ("✅ 重绘完成！" if ok else "❌ 失败")
     except Exception as e:
@@ -222,6 +231,85 @@ def _run_swap(video, ref_img, person_idx, prompt, neg, strength, steps, res):
 
 
 # ════════════════════════════════════════════════════════════
+# Tab 4: AI 视频内容生成 (Wan2.1)
+# ════════════════════════════════════════════════════════════
+
+def _run_wan_gen(video, prompt, neg, steps, cfg, res, seg_sec, blend, seed):
+    global _processing
+    with _lock:
+        if _processing:
+            return None, "⚠️ 已有任务运行中"
+        _processing = True
+
+    if not video:
+        with _lock:
+            _processing = False
+        return None, "❌ 请上传视频"
+    if not prompt or not prompt.strip():
+        with _lock:
+            _processing = False
+        return None, "❌ 请输入提示词"
+
+    _progress.clear()
+    out = "output_wan_gen.mp4"
+    try:
+        from src.vid2vid_gen import Wan2VidPipeline
+        from src.utils import sanitize_prompt, clamp
+
+        clean_prompt = sanitize_prompt(prompt)
+        pipe = Wan2VidPipeline(device="cuda")
+        ok = pipe.process_video(
+            video_path=video,
+            output_path=out,
+            prompt=clean_prompt,
+            negative_prompt=sanitize_prompt(neg) if neg else "",
+            num_steps=int(clamp(steps, 10, 50)),
+            guidance_scale=clamp(cfg, 1.0, 15.0),
+            resolution=int(clamp(res, 480, 720)),
+            max_segment_seconds=clamp(seg_sec, 10, 30),
+            junction_blend_frames=int(clamp(blend, 4, 16)),
+            seed=int(seed),
+        )
+
+        # 内容生成后也检测掉发关键词叠加粒子特效
+        if ok:
+            from src.hair_effect import should_trigger, HairFallEffect
+            if should_trigger(clean_prompt):
+                logger.info("检测到掉发关键词，叠加掉发粒子特效...")
+                fx = HairFallEffect()
+                final_out = "output_wan_gen_fx.mp4"
+                fx_ok = fx.process_video(out, final_out)
+                if fx_ok:
+                    out = final_out
+
+        return (out if ok else None), ("✅ 视频内容生成完成！" if ok else "❌ 失败")
+    except Exception as e:
+        logger.exception(f"异常: {e}")
+        return None, f"❌ {e}"
+    finally:
+        with _lock:
+            _processing = False
+
+
+# ════════════════════════════════════════════════════════════
+# 智能路由: 自动判断走风格重绘还是内容生成
+# ════════════════════════════════════════════════════════════
+
+def _run_smart(video, ref, prompt, neg, strength, steps, res, cfg, cn_scale, temporal,
+               gen_steps, gen_cfg, gen_res, gen_seg, gen_blend, gen_seed):
+    """根据提示词自动选择管线"""
+    from src.prompt_router import route_pipeline
+    route = route_pipeline(prompt, ref)
+    if route == "vid2vid_gen":
+        logger.info(f"智能路由 → Wan2.1 内容生成 (提示词含动作/内容变更)")
+        return _run_wan_gen(video, prompt, neg, gen_steps, gen_cfg, gen_res,
+                           gen_seg, gen_blend, gen_seed)
+    else:
+        logger.info(f"智能路由 → SD1.5 风格重绘")
+        return _run_v2v(video, ref, prompt, neg, strength, steps, res, cfg, cn_scale, temporal)
+
+
+# ════════════════════════════════════════════════════════════
 # 预设
 # ════════════════════════════════════════════════════════════
 
@@ -259,7 +347,7 @@ def build_ui():
 
         gr.Markdown("""
         # 🎬 AI 视频智能重绘工作站
-        **三大模式：全局风格重绘 · 指定人物替换 · 掉发特效**
+        **四大模式：全局风格重绘 · AI内容生成 · 指定人物替换 · 掉发特效**
         """)
 
         with gr.Tabs():
@@ -459,6 +547,76 @@ def build_ui():
                     fn=_run_fx,
                     inputs=[fx_video, fx_intensity, fx_length, fx_rate, fx_speed],
                     outputs=[fx_output, fx_status],
+                )
+
+            # ──────────────────────────────────────────
+            # Tab 4: AI 视频内容生成 (Wan2.1)
+            # ──────────────────────────────────────────
+            with gr.Tab("🎬 AI内容生成"):
+                gr.Markdown(
+                    "**视频内容级改变**: 上传视频 + 描述想要的动作/物体/场景 → "
+                    "AI 根据提示词生成全新的视频内容。\n\n"
+                    "与风格重绘不同，此模式可以添加新物体、改变动作、变换场景。\n"
+                    "基于 **Wan2.1-14B** 模型，需要 **80GB+ 显存** (A100/H100)。"
+                )
+
+                with gr.Row():
+                    with gr.Column(scale=3):
+                        gen_video = gr.Video(label="📹 输入视频 (最长5分钟)", height=280)
+                    with gr.Column(scale=2):
+                        gen_prompt = gr.Textbox(
+                            label="正向提示词",
+                            placeholder="描述你想要的内容变化，例如:\n"
+                                        "- 梳头发的时候，手里拿着梳子\n"
+                                        "- 场景变成下雪的街道\n"
+                                        "- 让人物穿上红色裙子跳舞",
+                            lines=5,
+                        )
+                        gen_neg = gr.Textbox(
+                            label="负向提示词",
+                            value="low quality, blurry, deformed, ugly, watermark, static, motionless",
+                            lines=2,
+                        )
+
+                with gr.Accordion("⚙️ 生成参数", open=False):
+                    with gr.Row():
+                        gen_steps = gr.Slider(10, 50, value=30, step=1, label="🔢 推理步数")
+                        gen_cfg = gr.Slider(1.0, 15.0, value=5.0, step=0.5, label="📏 引导强度 (CFG)")
+                        gen_res = gr.Slider(480, 720, value=720, step=48, label="📐 分辨率")
+                    with gr.Row():
+                        gen_seg = gr.Slider(10, 30, value=20, step=2, label="⏱️ 分段时长(秒)")
+                        gen_blend = gr.Slider(4, 16, value=8, step=2, label="🔗 段间过渡帧")
+                        gen_seed = gr.Number(label="🎲 随机种子", value=42, precision=0)
+
+                with gr.Row():
+                    gen_btn = gr.Button(
+                        "🚀 开始生成", variant="primary", scale=2, size="lg",
+                    )
+                    gen_smart_btn = gr.Button(
+                        "🧠 智能路由 (自动选择管线)", variant="secondary", scale=2, size="lg",
+                    )
+                    gen_status = gr.Textbox(label="状态", scale=2, interactive=False)
+
+                gen_output = gr.Video(label="📤 生成结果", height=350)
+
+                gen_btn.click(
+                    fn=_run_wan_gen,
+                    inputs=[gen_video, gen_prompt, gen_neg,
+                            gen_steps, gen_cfg, gen_res, gen_seg, gen_blend, gen_seed],
+                    outputs=[gen_output, gen_status],
+                )
+
+                # 智能路由: 需要同时传入两种管线的参数
+                # 风格重绘参数使用合理默认值
+                gen_smart_btn.click(
+                    fn=lambda video, prompt, neg, steps, cfg, res, seg, blend, seed: _run_smart(
+                        video, None, prompt, neg,
+                        0.35, 25, 768, 7.5, 0.8, 0.12,  # 风格重绘默认参数
+                        steps, cfg, res, seg, blend, seed,
+                    ),
+                    inputs=[gen_video, gen_prompt, gen_neg,
+                            gen_steps, gen_cfg, gen_res, gen_seg, gen_blend, gen_seed],
+                    outputs=[gen_output, gen_status],
                 )
 
         # ──────────────────────────────────────────

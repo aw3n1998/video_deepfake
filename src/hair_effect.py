@@ -35,13 +35,49 @@ HAIR_FALL_KEYWORDS = [
     "losing hair", "strands falling", "hair strands falling",
 ]
 
+# 组合关键词：prompt 同时包含任意一个"动作词"和任意一个"头发词"即触发
+_HAIR_WORDS = ["头发", "发丝", "hair", "strand"]
+_FALL_WORDS = ["掉", "落", "脱", "飘", "fall", "drop", "los"]
+
 
 def should_trigger(prompt: str) -> bool:
-    """检测提示词是否包含掉发关键词，决定是否自动触发"""
+    """检测提示词是否包含掉发关键词，决定是否自动触发。
+
+    支持两种匹配：
+    1. 精确子串匹配 (如 "掉发", "hair fall")
+    2. 组合匹配: 同时包含头发词 + 掉落词 (如 "掉落了一些头发")
+    """
     if not prompt:
         return False
     prompt_lower = prompt.lower()
-    return any(kw in prompt_lower for kw in HAIR_FALL_KEYWORDS)
+    # 精确匹配
+    if any(kw in prompt_lower for kw in HAIR_FALL_KEYWORDS):
+        return True
+    # 组合匹配：同时含"头发相关词"和"掉落相关词"
+    has_hair = any(w in prompt_lower for w in _HAIR_WORDS)
+    has_fall = any(w in prompt_lower for w in _FALL_WORDS)
+    return has_hair and has_fall
+
+
+# 视觉风格关键词：如果提示词含有这些，说明用户同时想改变画面风格
+_STYLE_WORDS = [
+    "风格", "质感", "光照", "色调", "赛博", "朋克", "油画", "动漫", "写实",
+    "电影", "复古", "梦幻", "水彩", "卡通", "黑白", "暖色", "冷色",
+    "style", "cinematic", "anime", "realistic", "painting", "vintage",
+    "cyberpunk", "fantasy", "watercolor", "cartoon",
+]
+
+
+def is_hair_only(prompt: str) -> bool:
+    """判断提示词是否纯粹描述掉发，不含视觉风格指令。
+
+    纯掉发描述（如 "梳头发的时候慢慢掉落了一些头发"）不需要经过 vid2vid，
+    直接叠加粒子特效即可，避免画质劣化。
+    """
+    if not prompt:
+        return True
+    prompt_lower = prompt.lower()
+    return not any(w in prompt_lower for w in _STYLE_WORDS)
 
 
 # ════════════════════════════════════════════════════════════

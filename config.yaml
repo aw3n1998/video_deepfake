@@ -15,6 +15,21 @@ vid2vid:
   temporal_smoothing: 0.12     # 时序平滑 (0=关闭)
   deflicker_window: 7          # 去闪烁窗口大小
 
+# Wan2.1 视频内容生成管线
+wan2vid:
+  model: "Wan-AI/Wan2.1-I2V-14B-720P-Diffusers"
+  device: cuda
+  device_map: null              # 多GPU时设为 "auto"
+  dtype: float16                # float16 或 bfloat16
+  default_steps: 30
+  default_guidance_scale: 5.0
+  default_resolution: 720
+  max_segment_seconds: 20       # 单次生成最大时长（秒）
+  max_video_duration: 300       # 最长支持视频（秒）= 5分钟
+  junction_blend_frames: 8      # 段间过渡帧数
+  rife_enabled: true            # 是否启用 RIFE 帧插值
+  seed: 42
+
 # 视频输出配置
 video:
   output_format: mp4

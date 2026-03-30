@@ -8,8 +8,8 @@ Pillow>=10.0.0
 # PyTorch (CUDA 12.x) - 单独安装:
 # pip install torch>=2.3.0 torchvision>=0.18.0 --index-url https://download.pytorch.org/whl/cu121
 
-# Stable Diffusion img2img / inpainting + ControlNet
-diffusers>=0.30.0
+# Stable Diffusion img2img / inpainting + ControlNet + Wan2.1
+diffusers>=0.32.0
 transformers>=4.40.0
 accelerate>=0.30.0
 controlnet-aux>=0.0.7
@@ -21,6 +21,9 @@ onnxruntime-gpu>=1.20.0       # GPU环境; CPU 改用 onnxruntime
 
 # Gradio 界面
 gradio>=4.20.0
+
+# RIFE 帧插值 (段间过渡平滑, 可选)
+rife-ncnn-vulkan>=1.0.0
 
 # 工具
 tqdm>=4.66
