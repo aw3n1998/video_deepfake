@@ -48,10 +48,9 @@ def main():
     # 2. 安装依赖
     # ──────────────────────────────────────────
     print("\n📦 安装项目依赖...")
+    # 强制重新安装 matplotlib 以匹配当前 numpy 版本，防止 numpy 更新后 C 扩展报错
     run("pip install -q -r requirements.txt")
-
-    # MediaPipe (掉发特效用，可选)
-    run("pip install -q mediapipe", check=False)
+    run("pip install -q -U --force-reinstall matplotlib")
 
     # FFmpeg (Colab 通常已预装)
     run("ffmpeg -version > /dev/null 2>&1 || apt-get install -y ffmpeg", check=False)

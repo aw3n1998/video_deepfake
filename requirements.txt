@@ -24,3 +24,5 @@ gradio>=4.20.0
 
 # 工具
 tqdm>=4.66
+mediapipe>=0.10.11
+matplotlib
