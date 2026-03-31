@@ -21,9 +21,17 @@ wan2vid:
   device: cuda
   device_map: null              # 多GPU时设为 "auto"
   dtype: float16                # float16 或 bfloat16
+  quantize: auto                # 量化策略: auto/int8/int4/none
+                                #   auto → 根据显存自动选择:
+                                #     ≥80GB (A100/H100) → 不量化
+                                #     24~80GB (RTX 5090/4090) → INT8
+                                #     <24GB → INT4
+                                #   int8 → 强制 INT8 (~14GB 权重, 质量接近无损)
+                                #   int4 → 强制 INT4 (~8GB 权重, 有损)
+                                #   none → 不量化 (~28GB 权重)
   default_steps: 30
   default_guidance_scale: 5.0
-  default_resolution: 720
+  default_resolution: 720       # RTX 5090 建议 480 以节省显存
   max_segment_seconds: 20       # 单次生成最大时长（秒）
   max_video_duration: 300       # 最长支持视频（秒）= 5分钟
   junction_blend_frames: 8      # 段间过渡帧数

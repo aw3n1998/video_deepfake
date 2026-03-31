@@ -22,6 +22,10 @@ onnxruntime-gpu>=1.20.0       # GPU环境; CPU 改用 onnxruntime
 # Gradio 界面
 gradio>=4.20.0
 
+# 显存优化 (RTX 5090/4090 等消费级显卡必装)
+bitsandbytes>=0.43.0            # INT8/INT4 量化
+# sageattention>=1.0.0          # SageAttention (可选, 需从源码安装)
+
 # RIFE 帧插值 (段间过渡平滑, 可选)
 rife-ncnn-vulkan>=1.0.0
 

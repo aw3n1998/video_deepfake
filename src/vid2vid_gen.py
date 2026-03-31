@@ -10,9 +10,16 @@ Wan2.1 视频内容生成管线 (Video-to-Video Content Generation)
 - 分段处理: 长视频切分 → 逐段生成 → 段间平滑拼接
 - RIFE 帧插值: 平滑段间过渡（可选）
 
-硬件需求：
-- 最低 80GB VRAM (A100/H100)
-- 支持 multi-GPU (device_map="auto")
+显存优化策略（自动适配）：
+- ≥80GB (A100/H100): float16 直接加载，速度最快
+- 24~48GB (RTX 5090/4090/A6000): INT8 量化 + VAE tiling + CPU offload
+- <24GB: 不推荐，可尝试 INT4 但质量下降明显
+
+支持的优化手段：
+- bitsandbytes INT8/INT4 量化（大幅减少权重显存）
+- SageAttention（注意力计算省 30% 显存，需单独安装）
+- VAE tiling/slicing（分块解码，避免 VAE 解码 OOM）
+- CPU offload（自动在 CPU/GPU 间调度模型层）
 """
 
 import cv2
@@ -31,6 +38,34 @@ logger = logging.getLogger(__name__)
 
 MAX_VIDEO_DURATION = 300  # 5 分钟
 DEFAULT_SEGMENT_SECONDS = 20
+
+# ════════════════════════════════════════════════════════════
+# 显存检测与优化策略
+# ════════════════════════════════════════════════════════════
+
+def _get_vram_gb() -> float:
+    """获取当前 GPU 显存总量 (GB)"""
+    if torch.cuda.is_available():
+        return torch.cuda.get_device_properties(0).total_mem / (1024 ** 3)
+    return 0.0
+
+
+def _check_sage_attention() -> bool:
+    """检测 SageAttention 是否可用"""
+    try:
+        from sageattention import sageattn  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _check_bitsandbytes() -> bool:
+    """检测 bitsandbytes 是否可用"""
+    try:
+        import bitsandbytes  # noqa: F401
+        return True
+    except ImportError:
+        return False
 
 
 @dataclass
@@ -60,44 +95,135 @@ class Wan2VidPipeline:
         device: str = "cuda",
         device_map: Optional[str] = None,
         dtype: str = "float16",
+        quantize: Optional[str] = "auto",
     ):
+        """
+        Args:
+            model_name: HuggingFace 模型 ID
+            device: "cuda" 或 "cpu"
+            device_map: 多 GPU 时设为 "auto"
+            dtype: "float16" 或 "bfloat16"
+            quantize: 量化策略
+                - "auto": 根据显存自动选择 (≥80GB→无量化, 24~80GB→INT8, <24GB→INT4)
+                - "int8": 强制 INT8 量化 (~14GB 权重)
+                - "int4": 强制 INT4 量化 (~8GB 权重，质量下降)
+                - None/"none": 不量化
+        """
         self.model_name = model_name
         self.device = device
         self.device_map = device_map
         self.dtype = torch.bfloat16 if dtype == "bfloat16" else torch.float16
+        self.quantize = quantize
         self.pipe = None
         self._rife_model = None
 
     # ════════════════════════════════════════════════════════════
-    # 模型初始化
+    # 模型初始化（显存自适应）
     # ════════════════════════════════════════════════════════════
 
+    def _resolve_quantize(self) -> Optional[str]:
+        """根据显存自动决定量化策略"""
+        if self.quantize and self.quantize != "auto":
+            return self.quantize if self.quantize != "none" else None
+
+        vram = _get_vram_gb()
+        logger.info(f"检测到 GPU 显存: {vram:.1f} GB")
+
+        if vram >= 80:
+            logger.info("显存充足 (≥80GB)，不使用量化")
+            return None
+        elif vram >= 24:
+            logger.info("显存中等 (24~80GB)，使用 INT8 量化以节省显存")
+            return "int8"
+        else:
+            logger.warning(f"显存较低 ({vram:.0f}GB)，使用 INT4 量化（质量会下降）")
+            return "int4"
+
     def _init_models(self):
-        """延迟加载 Wan2.1 管线"""
+        """延迟加载 Wan2.1 管线，自动适配显存"""
         from diffusers import WanImageToVideoPipeline
-        from diffusers.utils import export_to_video
 
         logger.info(f"加载 Wan2.1 模型: {self.model_name}")
         logger.info("这可能需要几分钟（首次加载需下载 ~28GB 权重）...")
 
+        quant_mode = self._resolve_quantize()
         load_kwargs = dict(torch_dtype=self.dtype)
+
         if self.device_map:
             load_kwargs["device_map"] = self.device_map
 
+        # ── 量化配置 ──
+        if quant_mode in ("int8", "int4") and _check_bitsandbytes():
+            from transformers import BitsAndBytesConfig
+
+            if quant_mode == "int8":
+                load_kwargs["quantization_config"] = BitsAndBytesConfig(
+                    load_in_8bit=True,
+                )
+                logger.info("INT8 量化已启用 (bitsandbytes) — 权重约 14GB")
+            else:
+                load_kwargs["quantization_config"] = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=self.dtype,
+                    bnb_4bit_quant_type="nf4",
+                )
+                logger.info("INT4 量化已启用 (bitsandbytes, nf4) — 权重约 8GB")
+        elif quant_mode in ("int8", "int4"):
+            logger.warning(
+                "bitsandbytes 未安装，无法量化。"
+                "请运行: pip install bitsandbytes>=0.43.0"
+            )
+
+        # ── 加载管线 ──
         self.pipe = WanImageToVideoPipeline.from_pretrained(
             self.model_name, **load_kwargs
         )
 
+        # ── CPU Offload（量化模式下尤为重要，节省激活值显存）──
         if not self.device_map:
             self.pipe.enable_model_cpu_offload()
+            logger.info("CPU offload 已启用")
 
+        # ── VAE 优化：tiling + slicing 避免解码 OOM ──
+        if hasattr(self.pipe, "vae"):
+            try:
+                self.pipe.vae.enable_tiling()
+                logger.info("VAE tiling 已启用（分块解码，减少显存峰值）")
+            except Exception:
+                pass
+            try:
+                self.pipe.vae.enable_slicing()
+                logger.info("VAE slicing 已启用（逐帧解码，减少显存峰值）")
+            except Exception:
+                pass
+
+        # ── 注意力优化：优先 SageAttention > xformers > 默认 ──
+        if _check_sage_attention():
+            try:
+                from diffusers.models.attention_processor import SageAttentionProcessor
+                self.pipe.transformer.set_attn_processor(SageAttentionProcessor())
+                logger.info("SageAttention 已启用（注意力计算省 ~30% 显存）")
+            except Exception:
+                # SageAttention 可能需要不同的集成方式
+                logger.info("SageAttention 检测到但无法自动集成，尝试 xformers")
+                self._try_xformers()
+        else:
+            self._try_xformers()
+
+        vram = _get_vram_gb()
+        logger.info(
+            f"Wan2.1 管线初始化完成 | "
+            f"量化: {quant_mode or '无'} | "
+            f"显存: {vram:.1f}GB"
+        )
+
+    def _try_xformers(self):
+        """尝试启用 xformers 显存优化"""
         try:
             self.pipe.enable_xformers_memory_efficient_attention()
             logger.info("xformers 显存优化已启用")
         except Exception:
             logger.info("xformers 不可用，使用默认注意力机制")
-
-        logger.info("Wan2.1 管线初始化完成")
 
     def _init_rife(self) -> bool:
         """尝试加载 RIFE 帧插值模型"""

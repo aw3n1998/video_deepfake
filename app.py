@@ -234,7 +234,7 @@ def _run_swap(video, ref_img, person_idx, prompt, neg, strength, steps, res):
 # Tab 4: AI 视频内容生成 (Wan2.1)
 # ════════════════════════════════════════════════════════════
 
-def _run_wan_gen(video, prompt, neg, steps, cfg, res, seg_sec, blend, seed):
+def _run_wan_gen(video, prompt, neg, steps, cfg, res, seg_sec, blend, seed, quantize="auto"):
     global _processing
     with _lock:
         if _processing:
@@ -257,7 +257,7 @@ def _run_wan_gen(video, prompt, neg, steps, cfg, res, seg_sec, blend, seed):
         from src.utils import sanitize_prompt, clamp
 
         clean_prompt = sanitize_prompt(prompt)
-        pipe = Wan2VidPipeline(device="cuda")
+        pipe = Wan2VidPipeline(device="cuda", quantize=quantize)
         ok = pipe.process_video(
             video_path=video,
             output_path=out,
@@ -557,7 +557,8 @@ def build_ui():
                     "**视频内容级改变**: 上传视频 + 描述想要的动作/物体/场景 → "
                     "AI 根据提示词生成全新的视频内容。\n\n"
                     "与风格重绘不同，此模式可以添加新物体、改变动作、变换场景。\n"
-                    "基于 **Wan2.1-14B** 模型，需要 **80GB+ 显存** (A100/H100)。"
+                    "基于 **Wan2.1-14B** 模型。支持 RTX 5090 (32GB) 及以上显卡，"
+                    "自动启用 INT8 量化 + VAE tiling 优化。"
                 )
 
                 with gr.Row():
@@ -587,6 +588,13 @@ def build_ui():
                         gen_seg = gr.Slider(10, 30, value=20, step=2, label="⏱️ 分段时长(秒)")
                         gen_blend = gr.Slider(4, 16, value=8, step=2, label="🔗 段间过渡帧")
                         gen_seed = gr.Number(label="🎲 随机种子", value=42, precision=0)
+                    with gr.Row():
+                        gen_quantize = gr.Dropdown(
+                            choices=["auto", "none", "int8", "int4"],
+                            value="auto",
+                            label="🧮 量化模式",
+                            info="auto=根据显存自动选择 | RTX 5090 (32GB) 建议 auto 或 int8",
+                        )
 
                 with gr.Row():
                     gen_btn = gr.Button(
@@ -602,20 +610,22 @@ def build_ui():
                 gen_btn.click(
                     fn=_run_wan_gen,
                     inputs=[gen_video, gen_prompt, gen_neg,
-                            gen_steps, gen_cfg, gen_res, gen_seg, gen_blend, gen_seed],
+                            gen_steps, gen_cfg, gen_res, gen_seg, gen_blend, gen_seed,
+                            gen_quantize],
                     outputs=[gen_output, gen_status],
                 )
 
                 # 智能路由: 需要同时传入两种管线的参数
                 # 风格重绘参数使用合理默认值
                 gen_smart_btn.click(
-                    fn=lambda video, prompt, neg, steps, cfg, res, seg, blend, seed: _run_smart(
+                    fn=lambda video, prompt, neg, steps, cfg, res, seg, blend, seed, quant: _run_smart(
                         video, None, prompt, neg,
                         0.35, 25, 768, 7.5, 0.8, 0.12,  # 风格重绘默认参数
                         steps, cfg, res, seg, blend, seed,
                     ),
                     inputs=[gen_video, gen_prompt, gen_neg,
-                            gen_steps, gen_cfg, gen_res, gen_seg, gen_blend, gen_seed],
+                            gen_steps, gen_cfg, gen_res, gen_seg, gen_blend, gen_seed,
+                            gen_quantize],
                     outputs=[gen_output, gen_status],
                 )
 
